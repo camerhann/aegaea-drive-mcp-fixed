@@ -126,7 +126,8 @@ async function resolvePath(pathStr: string): Promise<string> {
       fields: 'files(id)',
       spaces: 'drive',
       includeItemsFromAllDrives: true,
-      supportsAllDrives: true
+      supportsAllDrives: true,
+      corpora: 'allDrives'
     });
 
     // If the folder segment doesn't exist, create it
@@ -243,7 +244,8 @@ async function checkFileExists(name: string, parentFolderId: string = 'root'): P
       fields: 'files(id, name, mimeType)',
       pageSize: 1,
       includeItemsFromAllDrives: true,
-      supportsAllDrives: true
+      supportsAllDrives: true,
+      corpora: 'allDrives'
     });
     
     if (res.data.files && res.data.files.length > 0) {
@@ -617,13 +619,15 @@ server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
     pageToken?: string,
     q: string,
     includeItemsFromAllDrives: boolean,
-    supportsAllDrives: boolean
+    supportsAllDrives: boolean,
+    corpora: string
   } = {
     pageSize,
     fields: "nextPageToken, files(id, name, mimeType)",
     q: `trashed = false`,
     includeItemsFromAllDrives: true,
-    supportsAllDrives: true
+    supportsAllDrives: true,
+    corpora: 'allDrives'
   };
 
   if (request.params?.cursor) {
@@ -1420,7 +1424,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           pageToken: pageToken,
           fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size)",
           includeItemsFromAllDrives: true,
-          supportsAllDrives: true
+          supportsAllDrives: true,
+          corpora: 'allDrives'
         });
 
         const fileList = res.data.files?.map((f: drive_v3.Schema$File) => `${f.name} (${f.mimeType})`).join("\n") || '';
@@ -1591,7 +1596,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size)",
           orderBy: "name",
           includeItemsFromAllDrives: true,
-          supportsAllDrives: true
+          supportsAllDrives: true,
+          corpora: 'allDrives'
         });
 
         const files = res.data.files || [];
