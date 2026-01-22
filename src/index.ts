@@ -1589,16 +1589,61 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Default to root if no folder specified
         const targetFolderId = args.folderId || 'root';
 
-        const res = await drive.files.list({
+        // Check if folder is in a Shared Drive or IS a Shared Drive
+        let driveId: string | undefined;
+        let debugErrors: string[] = [];
+        if (targetFolderId !== 'root') {
+          // First, check if targetFolderId is itself a Shared Drive ID
+          try {
+            const driveInfo = await drive.drives.get({
+              driveId: targetFolderId,
+              fields: 'id'
+            });
+            // If this succeeds, the targetFolderId IS a Shared Drive
+            driveId = driveInfo.data.id;
+            log('Target is a Shared Drive', { targetFolderId, driveId });
+          } catch (err: any) {
+            // Log the error from drives.get to understand why it failed
+            const errMsg = err?.message || String(err);
+            debugErrors.push(`drives.get: ${errMsg}`);
+            log('drives.get failed', { targetFolderId, error: errMsg });
+            // Not a Shared Drive, check if it's a folder inside a Shared Drive
+            try {
+              const folderInfo = await drive.files.get({
+                fileId: targetFolderId,
+                fields: 'driveId',
+                supportsAllDrives: true
+              });
+              driveId = folderInfo.data.driveId;
+              log('Folder info', { targetFolderId, driveId });
+            } catch (err2: any) {
+              const errMsg2 = err2?.message || String(err2);
+              debugErrors.push(`files.get: ${errMsg2}`);
+              log('Could not get folder info', { targetFolderId, error: errMsg2 });
+            }
+          }
+        }
+
+        // Build list parameters - use drive-specific corpora for Shared Drives
+        const listParams: any = {
           q: `'${targetFolderId}' in parents and trashed = false`,
           pageSize: Math.min(args.pageSize || 50, 100),
           pageToken: args.pageToken,
           fields: "nextPageToken, files(id, name, mimeType, modifiedTime, size)",
           orderBy: "name",
           includeItemsFromAllDrives: true,
-          supportsAllDrives: true,
-          corpora: 'allDrives'
-        });
+          supportsAllDrives: true
+        };
+
+        if (driveId) {
+          // For Shared Drives, use corpora: 'drive' with the driveId
+          listParams.corpora = 'drive';
+          listParams.driveId = driveId;
+        } else {
+          listParams.corpora = 'allDrives';
+        }
+
+        const res = await drive.files.list(listParams);
 
         const files = res.data.files || [];
         const formattedFiles = files.map((file: drive_v3.Schema$File) => {
@@ -1609,6 +1654,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let response = `Contents of folder:\n\n${formattedFiles}`;
         if (res.data.nextPageToken) {
           response += `\n\nMore items available. Use pageToken: ${res.data.nextPageToken}`;
+        }
+
+        // Debug info
+        response += `\n\n[Debug: driveId=${driveId || 'undefined'}, corpora=${listParams.corpora}, files found=${files.length}]`;
+        if (debugErrors.length > 0) {
+          response += `\n[Errors: ${debugErrors.join(' | ')}]`;
         }
 
         return {
