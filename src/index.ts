@@ -11,7 +11,9 @@ import {
 import { google } from "googleapis";
 import type { drive_v3 } from "googleapis";
 import { v4 as uuidv4 } from 'uuid';
-import { authenticate, runAuthCommand, AuthServer, initializeOAuth2Client } from './auth.js';
+import { authenticate, runAuthCommand, AuthServer, initializeOAuth2Client, TokenManager } from './auth.js';
+import { getKeysFilePath, getSecureTokenPath } from './auth/utils.js';
+import * as fs from 'fs/promises';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
 import { readFileSync } from 'fs';
@@ -3405,23 +3407,39 @@ function showHelp(): void {
 Google Drive MCP Server v${VERSION}
 
 Usage:
-  npx @yourusername/google-drive-mcp [command]
+  npx aegaea-drive-mcp [command]
 
 Commands:
-  auth     Run the authentication flow
   start    Start the MCP server (default)
+  auth     Run the authentication flow
+  status   Check configuration and authentication status
+  setup    Guided first-time setup
   version  Show version information
   help     Show this help message
 
 Examples:
-  npx @yourusername/google-drive-mcp auth
-  npx @yourusername/google-drive-mcp start
-  npx @yourusername/google-drive-mcp version
-  npx @yourusername/google-drive-mcp
+  npx aegaea-drive-mcp              # Start the MCP server
+  npx aegaea-drive-mcp status       # Check if everything is configured correctly
+  npx aegaea-drive-mcp setup        # First-time setup wizard
+  npx aegaea-drive-mcp auth         # Re-authenticate with Google
 
 Environment Variables:
   GOOGLE_DRIVE_OAUTH_CREDENTIALS   Path to OAuth credentials file
   GOOGLE_DRIVE_MCP_TOKEN_PATH      Path to store authentication tokens
+
+For Claude Code, add to ~/.claude/settings.json:
+  {
+    "mcpServers": {
+      "google-drive": {
+        "command": "npx",
+        "args": ["-y", "aegaea-drive-mcp"],
+        "env": {
+          "GOOGLE_DRIVE_OAUTH_CREDENTIALS": "/path/to/gcp-oauth.keys.json",
+          "GOOGLE_DRIVE_MCP_TOKEN_PATH": "/path/to/tokens.json"
+        }
+      }
+    }
+  }
 `);
 }
 
@@ -3472,23 +3490,235 @@ async function runAuthServer(): Promise<void> {
   }
 }
 
+async function runStatusCheck(): Promise<void> {
+  console.log(`
+╔═══════════════════════════════════════════════════════════════╗
+║           AEGAEA DRIVE MCP - STATUS CHECK                     ║
+╚═══════════════════════════════════════════════════════════════╝
+`);
+
+  let allGood = true;
+
+  // Check 1: Credentials file
+  const credsPath = getKeysFilePath();
+  let credsExist = false;
+  try {
+    await fs.access(credsPath);
+    credsExist = true;
+    console.log(`✅ Credentials file: Found`);
+    console.log(`   Path: ${credsPath}`);
+  } catch {
+    allGood = false;
+    console.log(`❌ Credentials file: MISSING`);
+    console.log(`   Expected at: ${credsPath}`);
+    console.log(`   Set GOOGLE_DRIVE_OAUTH_CREDENTIALS env var or place file at path above`);
+  }
+
+  console.log('');
+
+  // Check 2: Token file
+  const tokenPath = getSecureTokenPath();
+  let tokenExist = false;
+  try {
+    await fs.access(tokenPath);
+    tokenExist = true;
+    console.log(`✅ Token file: Found`);
+    console.log(`   Path: ${tokenPath}`);
+  } catch {
+    allGood = false;
+    console.log(`❌ Token file: MISSING`);
+    console.log(`   Expected at: ${tokenPath}`);
+    console.log(`   Run: npx aegaea-drive-mcp auth`);
+  }
+
+  console.log('');
+
+  // Check 3: Token validity (only if both files exist)
+  if (credsExist && tokenExist) {
+    try {
+      const oauth2Client = await initializeOAuth2Client();
+      const tokenManager = new TokenManager(oauth2Client);
+      const tokensValid = await tokenManager.validateTokens();
+
+      if (tokensValid) {
+        console.log(`✅ Token validity: Valid`);
+
+        // Check 4: API connectivity
+        try {
+          const driveTest = google.drive({ version: 'v3', auth: oauth2Client });
+          const response = await driveTest.about.get({ fields: 'user' });
+          console.log(`✅ API connectivity: Connected`);
+          console.log(`   Authenticated as: ${response.data.user?.emailAddress}`);
+        } catch (apiError: any) {
+          allGood = false;
+          console.log(`❌ API connectivity: FAILED`);
+          console.log(`   Error: ${apiError.message}`);
+        }
+      } else {
+        allGood = false;
+        console.log(`❌ Token validity: EXPIRED or INVALID`);
+        console.log(`   Run: npx aegaea-drive-mcp auth`);
+      }
+    } catch (error: any) {
+      allGood = false;
+      console.log(`❌ Token validation: FAILED`);
+      console.log(`   Error: ${error.message}`);
+    }
+  }
+
+  console.log(`
+╔═══════════════════════════════════════════════════════════════╗`);
+  if (allGood) {
+    console.log(`║  STATUS: READY ✅                                             ║`);
+    console.log(`║  The MCP server is configured correctly and ready to use.    ║`);
+  } else {
+    console.log(`║  STATUS: SETUP REQUIRED ❌                                    ║`);
+    console.log(`║  Please fix the issues above before using the MCP server.    ║`);
+    console.log(`║  Run 'npx aegaea-drive-mcp setup' for guided configuration.  ║`);
+  }
+  console.log(`╚═══════════════════════════════════════════════════════════════╝
+`);
+
+  process.exit(allGood ? 0 : 1);
+}
+
+async function runGuidedSetup(): Promise<void> {
+  console.log(`
+╔═══════════════════════════════════════════════════════════════╗
+║           AEGAEA DRIVE MCP - FIRST TIME SETUP                 ║
+╚═══════════════════════════════════════════════════════════════╝
+
+This wizard will guide you through setting up Google Drive access.
+
+STEP 1: Create Google Cloud Project
+══════════════════════════════════════════════════════════════════
+1. Go to: https://console.cloud.google.com
+2. Click "Select a project" → "New Project"
+3. Name it (e.g., "Google Drive MCP")
+4. Note your Project ID
+
+STEP 2: Enable Required APIs
+══════════════════════════════════════════════════════════════════
+In your project, go to "APIs & Services" → "Library"
+Enable ALL of these APIs:
+  • Google Drive API
+  • Google Docs API
+  • Google Sheets API
+  • Google Slides API
+
+STEP 3: Configure OAuth Consent Screen
+══════════════════════════════════════════════════════════════════
+Go to "APIs & Services" → "OAuth consent screen"
+1. Choose "External" (or "Internal" for Google Workspace)
+2. Fill in:
+   • App name: "Google Drive MCP"
+   • User support email: Your email
+   • Developer contact: Your email
+3. Add your email as a test user
+
+STEP 4: Create OAuth Credentials
+══════════════════════════════════════════════════════════════════
+Go to "APIs & Services" → "Credentials"
+1. Click "+ CREATE CREDENTIALS" → "OAuth client ID"
+2. Application type: ** Desktop app ** (IMPORTANT!)
+3. Name: "Google Drive MCP Client"
+4. Download the JSON file
+5. Save it to: ${getKeysFilePath()}
+
+   Or set environment variable:
+   export GOOGLE_DRIVE_OAUTH_CREDENTIALS="/path/to/your/file.json"
+
+══════════════════════════════════════════════════════════════════
+Once you've completed the steps above, press Enter to authenticate...
+`);
+
+  // Wait for user input
+  await new Promise<void>((resolve) => {
+    process.stdin.setRawMode?.(false);
+    process.stdin.resume();
+    process.stdin.once('data', () => {
+      resolve();
+    });
+  });
+
+  // Check if credentials exist now
+  const credsPath = getKeysFilePath();
+  try {
+    await fs.access(credsPath);
+  } catch {
+    console.error(`
+❌ Credentials file not found at: ${credsPath}
+
+Please download your OAuth credentials from Google Cloud Console
+and save them to the path above, then run this setup again.
+`);
+    process.exit(1);
+  }
+
+  console.log(`
+✅ Credentials file found!
+
+Starting authentication flow...
+`);
+
+  // Run auth flow
+  await runAuthServer();
+
+  // Wait a moment for auth to complete
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  // Output Claude Code config
+  const tokenPath = getSecureTokenPath();
+  console.log(`
+╔═══════════════════════════════════════════════════════════════╗
+║           SETUP COMPLETE! 🎉                                  ║
+╚═══════════════════════════════════════════════════════════════╝
+
+Add this to your Claude Code settings (~/.claude/settings.json):
+
+{
+  "mcpServers": {
+    "google-drive": {
+      "command": "npx",
+      "args": ["-y", "aegaea-drive-mcp"],
+      "env": {
+        "GOOGLE_DRIVE_OAUTH_CREDENTIALS": "${credsPath}",
+        "GOOGLE_DRIVE_MCP_TOKEN_PATH": "${tokenPath}"
+      }
+    }
+  }
+}
+
+Then restart Claude Code to activate the Google Drive integration.
+
+To verify your setup, run: npx aegaea-drive-mcp status
+`);
+}
+
 // -----------------------------------------------------------------------------
 // MAIN EXECUTION
 // -----------------------------------------------------------------------------
 
-function parseCliArgs(): { command: string | undefined } {
+function parseCliArgs(): { command: string | undefined; skipAuthCheck: boolean } {
   const args = process.argv.slice(2);
   let command: string | undefined;
+  let skipAuthCheck = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    
+
     // Handle special version/help flags as commands
     if (arg === '--version' || arg === '-v' || arg === '--help' || arg === '-h') {
       command = arg;
       continue;
     }
-    
+
+    // Handle --skip-auth-check flag
+    if (arg === '--skip-auth-check') {
+      skipAuthCheck = true;
+      continue;
+    }
+
     // Check for command (first non-option argument)
     if (!command && !arg.startsWith('--')) {
       command = arg;
@@ -3496,25 +3726,120 @@ function parseCliArgs(): { command: string | undefined } {
     }
   }
 
-  return { command };
+  return { command, skipAuthCheck };
+}
+
+/**
+ * Pre-flight check to validate authentication before starting MCP server.
+ * This prevents silent failures when Claude Code connects but auth is missing.
+ */
+async function validateAuthReadiness(): Promise<{ ready: boolean; error?: string }> {
+  // Check 1: Credentials file exists (HARD REQUIREMENT)
+  const credsPath = getKeysFilePath();
+  try {
+    await fs.access(credsPath);
+  } catch {
+    return {
+      ready: false,
+      error: `OAuth credentials file not found at: ${credsPath}
+
+To fix this:
+1. Download OAuth credentials from Google Cloud Console
+2. Save to: ${credsPath}
+   Or set: GOOGLE_DRIVE_OAUTH_CREDENTIALS=/path/to/file.json
+
+Run 'npx aegaea-drive-mcp setup' for guided configuration.`
+    };
+  }
+
+  // Check 2: Token file exists (SOFT WARNING - might work with auth flow)
+  const tokenPath = getSecureTokenPath();
+  try {
+    await fs.access(tokenPath);
+  } catch {
+    return {
+      ready: false,
+      error: `Authentication tokens not found at: ${tokenPath}
+
+To fix this:
+1. Run: npx aegaea-drive-mcp auth
+2. Complete the Google sign-in in your browser
+3. Restart Claude Code
+
+Run 'npx aegaea-drive-mcp status' to verify your setup.`
+    };
+  }
+
+  // Check 3: Tokens are valid (try to load and validate)
+  try {
+    const oauth2Client = await initializeOAuth2Client();
+    const tokenManager = new TokenManager(oauth2Client);
+    const valid = await tokenManager.validateTokens();
+
+    if (!valid) {
+      return {
+        ready: false,
+        error: `Authentication tokens are expired or invalid.
+
+To fix this:
+1. Run: npx aegaea-drive-mcp auth
+2. Complete the Google sign-in in your browser
+3. Restart Claude Code`
+      };
+    }
+  } catch (error: any) {
+    return {
+      ready: false,
+      error: `Failed to validate authentication: ${error.message}
+
+Run 'npx aegaea-drive-mcp status' to diagnose the issue.`
+    };
+  }
+
+  return { ready: true };
 }
 
 async function main() {
-  const { command } = parseCliArgs();
+  const { command, skipAuthCheck } = parseCliArgs();
 
   switch (command) {
     case "auth":
       await runAuthServer();
       break;
+    case "status":
+      await runStatusCheck();
+      break;
+    case "setup":
+      await runGuidedSetup();
+      break;
     case "start":
     case undefined:
       try {
+        // Pre-flight auth check (unless skipped)
+        if (!skipAuthCheck) {
+          const authCheck = await validateAuthReadiness();
+          if (!authCheck.ready) {
+            console.error(`
+╔═══════════════════════════════════════════════════════════════╗
+║  AEGAEA DRIVE MCP - AUTHENTICATION REQUIRED                   ║
+╚═══════════════════════════════════════════════════════════════╝
+
+${authCheck.error}
+
+To bypass this check (not recommended), use: --skip-auth-check
+`);
+            process.exit(1);
+          }
+        } else {
+          console.error('Warning: Auth check skipped. Server may fail if credentials are invalid.');
+        }
+
         // Start the MCP server
         console.error("Starting Google Drive MCP server...");
         const transport = new StdioServerTransport();
         await server.connect(transport);
         log('Server started successfully');
-        
+
         // Set up graceful shutdown
         process.on("SIGINT", async () => {
           await server.close();

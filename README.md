@@ -258,6 +258,41 @@ Authentication tokens are stored securely following the XDG Base Directory speci
 - Tokens auto-refresh before expiration
 - Google OAuth apps in "Testing" status have refresh tokens that expire after 7 days (Google's policy)
 
+## Usage with Claude Code (CLI)
+
+Add the server to your Claude Code settings file:
+
+**Location**: `~/.claude/settings.json`
+
+```json
+{
+  "mcpServers": {
+    "google-drive": {
+      "command": "npx",
+      "args": ["-y", "aegaea-drive-mcp"],
+      "env": {
+        "GOOGLE_DRIVE_OAUTH_CREDENTIALS": "/path/to/your/gcp-oauth.keys.json",
+        "GOOGLE_DRIVE_MCP_TOKEN_PATH": "/path/to/your/tokens.json"
+      }
+    }
+  }
+}
+```
+
+**Important**: The `-y` flag is required to auto-confirm npx installation.
+
+After adding the configuration, restart Claude Code to activate the integration.
+
+### Verify Your Setup
+
+Before using with Claude Code, verify everything is configured correctly:
+
+```bash
+npx aegaea-drive-mcp status
+```
+
+This will check your credentials, tokens, and API connectivity.
+
 ## Usage with Claude Desktop
 
 Add the server to your Claude Desktop configuration:
@@ -271,7 +306,7 @@ Add the server to your Claude Desktop configuration:
   "mcpServers": {
     "google-drive": {
       "command": "npx",
-      "args": ["aegaea-drive-mcp"],
+      "args": ["-y", "aegaea-drive-mcp"],
       "env": {
         "GOOGLE_DRIVE_OAUTH_CREDENTIALS": "/path/to/your/gcp-oauth.keys.json"
       }
@@ -286,7 +321,7 @@ Add the server to your Claude Desktop configuration:
   "mcpServers": {
     "google-drive": {
       "command": "node",
-      "args": ["/absolute/path/to/google-drive-mcp/dist/index.js"],
+      "args": ["/absolute/path/to/aegaea-drive-mcp/dist/index.js"],
       "env": {
         "GOOGLE_DRIVE_OAUTH_CREDENTIALS": "/path/to/your/gcp-oauth.keys.json"
       }
