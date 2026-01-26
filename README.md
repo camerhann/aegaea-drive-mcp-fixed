@@ -260,9 +260,11 @@ Authentication tokens are stored securely following the XDG Base Directory speci
 
 ## Usage with Claude Code (CLI)
 
-Add the server to your Claude Code settings file:
+Add the server to your Claude Code MCP configuration file.
 
-**Location**: `~/.claude/settings.json`
+**Location**: `~/.mcp.json` (global) or `.mcp.json` in your project root (project-specific)
+
+> **Important**: Claude Code reads MCP server configurations from `.mcp.json` files, NOT from `settings.json`. The `mcpServers` field in `settings.json` is ignored.
 
 ```json
 {
@@ -279,9 +281,10 @@ Add the server to your Claude Code settings file:
 }
 ```
 
-**Important**: The `-y` flag is required to auto-confirm npx installation.
-
-After adding the configuration, restart Claude Code to activate the integration.
+**Important notes**:
+- The `-y` flag is required to auto-confirm npx installation
+- After adding the configuration, **fully restart Claude Code** (quit and reopen) to activate the integration
+- MCP servers connect at startup and do not hot-reload during a session
 
 ### Verify Your Setup
 
