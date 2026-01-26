@@ -260,41 +260,45 @@ Authentication tokens are stored securely following the XDG Base Directory speci
 
 ## Usage with Claude Code (CLI)
 
-Add the server to your Claude Code MCP configuration file.
+Add the server using the `claude mcp add` command:
 
-**Location**: `~/.mcp.json` (global) or `.mcp.json` in your project root (project-specific)
-
-> **Important**: Claude Code reads MCP server configurations from `.mcp.json` files, NOT from `settings.json`. The `mcpServers` field in `settings.json` is ignored.
-
-```json
-{
-  "mcpServers": {
-    "google-drive": {
-      "command": "npx",
-      "args": ["-y", "aegaea-drive-mcp"],
-      "env": {
-        "GOOGLE_DRIVE_OAUTH_CREDENTIALS": "/path/to/your/gcp-oauth.keys.json",
-        "GOOGLE_DRIVE_MCP_TOKEN_PATH": "/path/to/your/tokens.json"
-      }
-    }
-  }
-}
+```bash
+# Add with user scope (available across all projects)
+claude mcp add google-drive -t stdio -s user \
+  -e "GOOGLE_DRIVE_OAUTH_CREDENTIALS=/path/to/your/gcp-oauth.keys.json" \
+  -e "GOOGLE_DRIVE_MCP_TOKEN_PATH=/path/to/your/tokens.json" \
+  -- npx -y aegaea-drive-mcp
 ```
 
-**Important notes**:
-- The `-y` flag is required to auto-confirm npx installation
-- After adding the configuration, **fully restart Claude Code** (quit and reopen) to activate the integration
+**Scope options:**
+- `user` - Available across all your projects (stored in `~/.claude.json`)
+- `local` - Only available in the current project (default)
+- `project` - Shared with team via `.mcp.json` in project root
+
+### Verify the server is connected
+
+```bash
+# List all MCP servers and their status
+claude mcp list
+```
+
+You should see: `google-drive: npx -y aegaea-drive-mcp - ✓ Connected`
+
+### Important notes
+
+- **Restart required**: After adding, **fully restart Claude Code** (quit and reopen) for tools to be available
 - MCP servers connect at startup and do not hot-reload during a session
+- The `-y` flag in the npx command auto-confirms package installation
 
-### Verify Your Setup
+### Pre-flight check
 
-Before using with Claude Code, verify everything is configured correctly:
+Before using with Claude Code, verify your credentials are configured correctly:
 
 ```bash
 npx aegaea-drive-mcp status
 ```
 
-This will check your credentials, tokens, and API connectivity.
+This checks your OAuth credentials, tokens, and API connectivity.
 
 ## Usage with Claude Desktop
 
