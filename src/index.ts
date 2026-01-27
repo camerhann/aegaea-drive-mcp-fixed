@@ -269,6 +269,11 @@ const SearchSchema = z.object({
   pageToken: z.string().optional()
 });
 
+const DownloadFileSchema = z.object({
+  fileId: z.string().min(1, "File ID is required"),
+  outputPath: z.string().min(1, "Output path is required")
+});
+
 const CreateTextFileSchema = z.object({
   name: z.string().min(1, "File name is required"),
   content: z.string(),
@@ -1387,6 +1392,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["presentationId", "pageObjectId", "shapeType", "x", "y", "width", "height"]
         }
+      },
+      {
+        name: "downloadFile",
+        description: "Download a file from Google Drive to a local path",
+        inputSchema: {
+          type: "object",
+          properties: {
+            fileId: { type: "string", description: "Google Drive file ID" },
+            outputPath: { type: "string", description: "Local file path to save the downloaded file" }
+          },
+          required: ["fileId", "outputPath"]
+        }
       }
     ]
   };
@@ -1430,7 +1447,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           corpora: 'allDrives'
         });
 
-        const fileList = res.data.files?.map((f: drive_v3.Schema$File) => `${f.name} (${f.mimeType})`).join("\n") || '';
+        const fileList = res.data.files?.map((f: drive_v3.Schema$File) => `${f.name} (${f.mimeType}) [ID: ${f.id}]`).join("\n") || '';
         log('Search results', { query: userQuery, resultCount: res.data.files?.length });
 
         let response = `Found ${res.data.files?.length ?? 0} files:\n${fileList}`;
@@ -3385,6 +3402,67 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         return {
           content: [{ type: "text", text: `Created ${args.shapeType} shape with ID: ${elementId}` }],
+          isError: false
+        };
+      }
+
+      case "downloadFile": {
+        const validation = DownloadFileSchema.safeParse(request.params.arguments);
+        if (!validation.success) {
+          return errorResponse(validation.error.errors[0].message);
+        }
+        const { fileId, outputPath } = validation.data;
+
+        // Get file metadata first to determine if it's a Google Doc type
+        const fileMetadata = await drive.files.get({
+          fileId: fileId,
+          fields: 'name, mimeType',
+          supportsAllDrives: true
+        });
+
+        const fileName = fileMetadata.data.name;
+        const mimeType = fileMetadata.data.mimeType;
+        log('Downloading file', { fileId, fileName, mimeType, outputPath });
+
+        let fileContent: Buffer;
+        let finalPath = outputPath;
+
+        // Handle Google Workspace files that need export
+        const exportMimeTypes: { [key: string]: { mime: string; ext: string } } = {
+          'application/vnd.google-apps.document': { mime: 'application/pdf', ext: '.pdf' },
+          'application/vnd.google-apps.spreadsheet': { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext: '.xlsx' },
+          'application/vnd.google-apps.presentation': { mime: 'application/pdf', ext: '.pdf' },
+          'application/vnd.google-apps.drawing': { mime: 'image/png', ext: '.png' }
+        };
+
+        if (exportMimeTypes[mimeType]) {
+          // Export Google Workspace file
+          const exportConfig = exportMimeTypes[mimeType];
+          const res = await drive.files.export({
+            fileId: fileId,
+            mimeType: exportConfig.mime
+          }, { responseType: 'arraybuffer' });
+          fileContent = Buffer.from(res.data as ArrayBuffer);
+          // Add extension if output path doesn't have one
+          if (!finalPath.includes('.')) {
+            finalPath += exportConfig.ext;
+          }
+        } else {
+          // Download regular file
+          const res = await drive.files.get({
+            fileId: fileId,
+            alt: 'media',
+            supportsAllDrives: true
+          }, { responseType: 'arraybuffer' });
+          fileContent = Buffer.from(res.data as ArrayBuffer);
+        }
+
+        // Write to local filesystem
+        await fs.writeFile(finalPath, fileContent);
+        log('File downloaded successfully', { finalPath, size: fileContent.length });
+
+        return {
+          content: [{ type: "text", text: `Downloaded "${fileName}" to ${finalPath} (${fileContent.length} bytes)` }],
           isError: false
         };
       }
